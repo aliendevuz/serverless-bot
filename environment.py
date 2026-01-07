@@ -9,7 +9,7 @@ from application import handle_message
 
 class TelegramEnvironment:
     def __init__(self):
-        self.bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN")
+        self.bot_token = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
     
     def process_message(self, message_data):
