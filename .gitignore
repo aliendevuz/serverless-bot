@@ -52,3 +52,6 @@ Thumbs.db
 
 # Dependencies
 site-packages/
+
+# cache
+.pytest_cache

@@ -354,7 +354,6 @@ class TelegramAdapter:
                 
                 elif command == "/help":
                     response_text = self.env.app.handle_help_command()
-                    BugHunter().log_error(error_type="NO_ERROR", error_msg=text, context_data=response_text)
                 
                 elif command == "/info":
                     response_text = self.env.app.handle_info_command()
