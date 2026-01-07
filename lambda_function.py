@@ -4,135 +4,308 @@ import requests
 
 
 # ============= APPLICATION LAYER =============
-def handle_message(message_data):
-    """
-    Application layer - handles the actual business logic of processing messages
+class BotApplication:
+    """Application layer - business logic for bot responses"""
     
-    Args:
-        message_data: Dictionary containing message information
-        
-    Returns:
-        Dictionary with the response text
-    """
-    text = message_data.get("text", "")
+    @staticmethod
+    def handle_start_command(user_id, user_first_name=None):
+        """Handle /start command"""
+        name = user_first_name or "Foydalanuvchi"
+        return f"Assalomu alaikum {name}! 👋\n\nMen sizning assistant botingiman. Men bilan ham qanday ishlashni keyinroq bilib olasiz!"
     
-    # Simple echo response with emoji
-    response_text = f"Siz yuborganingiz: {text} ✅"
+    @staticmethod
+    def handle_help_command():
+        """Handle /help command"""
+        return """📖 Mening buyruqlarim:
+
+/start - Boshlang'ich xabar
+/help - Bu xabar
+/info - Men haqimda ma'lumot
+/echo <text> - Xabarni takrorlash
+
+Shuningdek, qayta ishlanuvchi tugmalar bilan o'ynay olasiz! 🎮"""
     
-    return {
-        "text": response_text
-    }
+    @staticmethod
+    def handle_info_command():
+        """Handle /info command"""
+        return """ℹ️ Men haqimda:
+
+Men aiogramda yozilgan bot.
+Webhook rejimida ishlayman.
+Serverless infrastructureda (AWS Lambda) joylashtirildim.
+
+Muloqotingiz uchun rahmat! ❤️"""
+    
+    @staticmethod
+    def handle_echo_message(text):
+        """Echo user's message"""
+        return f"Siz yuborganingiz: {text} ✅"
+    
+    @staticmethod
+    def handle_callback(callback_data):
+        """Handle callback button presses"""
+        callbacks = {
+            "btn_hello": "Salom! 👋",
+            "btn_help": "Yordam kerakmi? /help buyrug'ini kiriting",
+            "btn_info": "Info uchun /info buyrug'ini kiriting"
+        }
+        return callbacks.get(callback_data, "Noma'lum tugma 🤔")
 
 
 # ============= ENVIRONMENT LAYER =============
 class TelegramEnvironment:
+    """Environment layer - Telegram API communication"""
+    
     def __init__(self, is_simulator=False):
         self.bot_token = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
         self.is_simulator = is_simulator
-        self.simulator_url = os.environ.get("SIMULATOR_URL", "http://localhost:8000")
+        self.app = BotApplication()
+        self.responses = []  # Store responses for tracking
     
-    def process_message(self, message_data):
-        """
-        Process message through application layer and prepare response
-        
-        Args:
-            message_data: Dictionary containing message info
-            
-        Returns:
-            Dictionary with response and chat_id
-        """
-        # Handle the message through application layer
-        response = handle_message(message_data)
-        
-        return {
-            "chat_id": message_data.get("chat_id"),
-            "text": response.get("text")
+    def send_message(self, chat_id, text, reply_markup=None):
+        """Send message via Telegram API or store for simulator"""
+        message_data = {
+            "chat_id": chat_id,
+            "text": text,
+            "method": "sendMessage"
         }
-    
-    def send_message(self, response_data):
-        """
-        Send message to Telegram via API or to Simulator
         
-        Args:
-            response_data: Dictionary with chat_id and text
-            
-        Returns:
-            Boolean indicating success
-        """
+        if self.is_simulator:
+            print(f"[SIMULATOR] Sending to {chat_id}: {text}")
+            self.responses.append(message_data)
+            return {"success": True, "response_text": text}
+        
         try:
             payload = {
-                "chat_id": response_data.get("chat_id"),
-                "text": response_data.get("text")
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML"
             }
             
-            # If simulator, send to simulator endpoint instead of Telegram
-            if self.is_simulator:
-                # Simulator will handle response rendering on frontend
-                print(f"[SIMULATOR] Message queued for user {response_data.get('chat_id')}: {response_data.get('text')}")
-                return True
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
             
-            # Real Telegram API
             response = requests.post(
                 f"{self.api_url}/sendMessage",
                 json=payload,
                 timeout=10
             )
             
-            return response.status_code == 200
+            if response.status_code == 200:
+                self.responses.append(message_data)
+            
+            return {
+                "success": response.status_code == 200,
+                "response_text": text,
+                "status_code": response.status_code
+            }
         except Exception as e:
             print(f"Error sending message: {str(e)}")
+            return {
+                "success": False,
+                "response_text": f"Xato: {str(e)}",
+                "error": str(e)
+            }
+    
+    def answer_callback_query(self, callback_query_id, text=None, show_alert=False):
+        """Answer callback query (button click notification)"""
+        if self.is_simulator:
+            print(f"[SIMULATOR] Callback answer: {text}")
+            self.responses.append({
+                "method": "answerCallbackQuery",
+                "callback_query_id": callback_query_id,
+                "text": text
+            })
+            return True
+        
+        try:
+            payload = {
+                "callback_query_id": callback_query_id,
+                "show_alert": show_alert
+            }
+            
+            if text:
+                payload["text"] = text
+            
+            response = requests.post(
+                f"{self.api_url}/answerCallbackQuery",
+                json=payload,
+                timeout=10
+            )
+            
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Error answering callback: {str(e)}")
             return False
 
 
 # ============= ADAPTER LAYER =============
 class TelegramAdapter:
-    def __init__(self, is_simulator=False):
-        self.telegram_env = TelegramEnvironment(is_simulator=is_simulator)
-        self.is_simulator = is_simulator
+    """
+    Adapter layer - bridges Lambda webhook events to bot logic
+    Routes updates to appropriate handlers (commands, callbacks, messages)
+    """
     
-    def process_update(self, update):
+    def __init__(self, is_simulator=False):
+        self.is_simulator = is_simulator
+        self.env = TelegramEnvironment(is_simulator=is_simulator)
+    
+    def _get_start_keyboard(self):
+        """Generate start command keyboard"""
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "👋 Salom", "callback_data": "btn_hello"},
+                    {"text": "❓ Yordam", "callback_data": "btn_help"}
+                ],
+                [
+                    {"text": "ℹ️ Info", "callback_data": "btn_info"}
+                ]
+            ]
+        }
+    
+    def process_update(self, update_dict):
         """
-        Process incoming Telegram update
+        Process incoming webhook update
+        Routes to message handler, command handler, or callback handler
         
         Args:
-            update: Telegram update object from webhook
+            update_dict: Raw Telegram update dictionary
             
         Returns:
-            Dictionary with success status
+            Processing result with response
         """
         try:
-            # Extract message from update
-            message = update.get("message", {})
+            # Handle message updates
+            if "message" in update_dict:
+                return self._handle_message(update_dict["message"])
             
-            if not message:
-                return {"success": False, "error": "No message in update"}
+            # Handle callback query updates (button clicks)
+            elif "callback_query" in update_dict:
+                return self._handle_callback_query(update_dict["callback_query"])
             
-            # Prepare message data for environment
-            message_data = {
-                "chat_id": message.get("chat", {}).get("id"),
-                "text": message.get("text", ""),
-                "message_id": message.get("message_id"),
-                "user_id": message.get("from", {}).get("id")
+            # Other updates are ignored (channel posts, edited messages, etc.)
+            else:
+                return {
+                    "success": True,
+                    "message": "Update type not handled (ignored)",
+                    "is_simulator": self.is_simulator
+                }
+        
+        except Exception as e:
+            print(f"[ERROR] Update processing failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": str(e),
+                "error": str(e),
+                "is_simulator": self.is_simulator
             }
+    
+    def _handle_message(self, message):
+        """Handle incoming message updates"""
+        try:
+            chat_id = message.get("chat", {}).get("id")
+            user_id = message.get("from", {}).get("id")
+            user_first_name = message.get("from", {}).get("first_name")
+            text = message.get("text", "").strip()
             
-            # Pass to environment for processing
-            response_data = self.telegram_env.process_message(message_data)
+            if not text:
+                return {"success": True, "message": "Empty message ignored"}
             
-            # Send response back through environment
-            success = self.telegram_env.send_message(response_data)
+            response_text = None
+            keyboard = None
+            
+            # Route to command or message handler
+            if text.startswith("/"):
+                # Command message
+                command = text.split()[0]  # /start, /help, /echo, etc.
+                
+                if command == "/start":
+                    response_text = self.env.app.handle_start_command(user_id, user_first_name)
+                    keyboard = self._get_start_keyboard()
+                
+                elif command == "/help":
+                    response_text = self.env.app.handle_help_command()
+                
+                elif command == "/info":
+                    response_text = self.env.app.handle_info_command()
+                
+                elif command == "/echo":
+                    # /echo <text>
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2:
+                        response_text = "Foydalanish: /echo <sizning xabaringiz>"
+                    else:
+                        response_text = self.env.app.handle_echo_message(parts[1])
+                
+                else:
+                    # Unknown command
+                    response_text = f"Noma'lum buyruq: {command}\n/help buyrug'ini kiriting"
+            
+            else:
+                # Regular text message - echo it
+                response_text = self.env.app.handle_echo_message(text)
+            
+            # Send response
+            if response_text:
+                self.env.send_message(
+                    chat_id,
+                    response_text,
+                    reply_markup=keyboard
+                )
             
             return {
-                "success": success,
-                "message": "Message processed and sent" if success else "Failed to send message",
-                "response_text": response_data.get("text"),
-                "is_simulator": self.is_simulator
+                "success": True,
+                "message": "Message processed",
+                "response_text": response_text,
+                "is_simulator": self.is_simulator,
+                "responses": self.env.responses if self.is_simulator else []
             }
         
         except Exception as e:
+            print(f"[ERROR] Message handling failed: {str(e)}")
             return {
                 "success": False,
-                "error": str(e)
+                "message": str(e),
+                "error": str(e),
+                "is_simulator": self.is_simulator
+            }
+    
+    def _handle_callback_query(self, callback_query):
+        """Handle callback query updates (button clicks)"""
+        try:
+            callback_id = callback_query.get("id")
+            callback_data = callback_query.get("data", "")
+            chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+            
+            # Get response text for this callback
+            response_text = self.env.app.handle_callback(callback_data)
+            
+            # Answer the callback query (show notification)
+            self.env.answer_callback_query(callback_id, response_text, show_alert=False)
+            
+            # Send response message
+            if chat_id:
+                self.env.send_message(chat_id, response_text)
+            
+            return {
+                "success": True,
+                "message": "Callback processed",
+                "response_text": response_text,
+                "is_simulator": self.is_simulator,
+                "responses": self.env.responses if self.is_simulator else []
+            }
+        
+        except Exception as e:
+            print(f"[ERROR] Callback handling failed: {str(e)}")
+            return {
+                "success": False,
+                "message": str(e),
+                "error": str(e),
+                "is_simulator": self.is_simulator
             }
 
 
@@ -141,23 +314,33 @@ def lambda_handler(event, context):
     """
     AWS Lambda handler for Telegram webhook
     
+    Architecture:
+    - Lambda receives webhook event from Telegram
+    - Adapter routes to appropriate handler (message, command, callback)
+    - Environment sends response via Telegram API
+    - Returns success status to Lambda
+    
     Flow:
-    1. Receives webhook event from Telegram or Simulator
-    2. Passes to adapter
-    3. Adapter -> Environment -> Application (processing)
-    4. Application -> Environment -> Adapter (response)
-    5. Adapter sends response to Telegram or Simulator
-    6. Returns success status to Lambda
+    1. Parse incoming webhook event
+    2. Check if simulator request (X-Simulator header)
+    3. Create adapter with simulator flag
+    4. Process update through adapter
+    5. Adapter routes to command/message/callback handler
+    6. Handler processes through application layer
+    7. Environment sends response via Telegram API
+    8. Return result to Lambda
     """
     try:
         # Parse incoming webhook event
-        body = json.loads(event.get("body", "{}")) if isinstance(event.get("body"), str) else event.get("body", {})
+        body = event.get("body", "{}")
+        if isinstance(body, str):
+            body = json.loads(body)
         
         # Check if request is from simulator
         headers = event.get("headers", {})
         is_simulator = headers.get("X-Simulator", "").lower() == "true"
         
-        # Initialize adapter with simulator flag
+        # Process update through adapter
         adapter = TelegramAdapter(is_simulator=is_simulator)
         result = adapter.process_update(body)
         
@@ -166,12 +349,16 @@ def lambda_handler(event, context):
             "headers": {"Content-Type": "application/json"},
             "body": json.dumps({
                 "result": "ok",
-                "message": "Lambda executed successfully",
+                "message": "Webhook processed successfully",
                 "details": result
             }),
         }
     
     except Exception as e:
+        print(f"[LAMBDA ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         return {
             "statusCode": 500,
             "headers": {"Content-Type": "application/json"},
