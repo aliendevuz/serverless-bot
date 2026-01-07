@@ -1,6 +1,79 @@
 import json
 import os
 import requests
+import traceback
+from datetime import datetime
+
+
+# ============= BUG HUNTER LOGGER =============
+class BugHunter:
+    """Send critical errors to Telegram bot for monitoring"""
+    
+    def __init__(self):
+        self.token = os.environ.get("BUG_HUNTER_BOT_TOKEN")
+        self.chat_id = os.environ.get("BUG_HUNTER_CHAT_ID", "")
+        self.enabled = bool(self.token and self.chat_id)
+    
+    def log_error(self, error_type: str, error_msg: str, stack_trace: str = "", context_data: dict = None):
+        """Log error to Telegram bot with details"""
+        if not self.enabled:
+            return False
+        
+        try:
+            timestamp = datetime.now().isoformat()
+            
+            # Prepare detailed log message (for file)
+            detailed_log = f"""
+🚨 BUG ALERT 🚨
+═══════════════════════════════════════════
+Timestamp: {timestamp}
+Error Type: {error_type}
+Message: {error_msg}
+
+Stack Trace:
+─────────────────────────────────────────────
+{stack_trace}
+
+Context Data:
+─────────────────────────────────────────────
+{json.dumps(context_data or {}, indent=2, ensure_ascii=False)}
+═══════════════════════════════════════════
+"""
+            
+            # Prepare short message for Telegram (message size limited to 4096)
+            short_msg = f"""🚨 ERROR DETECTED 🚨
+
+*Type:* `{error_type}`
+*Time:* `{timestamp}`
+
+*Error:*
+```
+{error_msg[:200]}
+```
+
+*Details:* See attached file or CloudWatch logs
+"""
+            
+            # Send to Telegram bot
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            payload = {
+                "chat_id": self.chat_id,
+                "text": short_msg,
+                "parse_mode": "Markdown"
+            }
+            
+            response = requests.post(url, json=payload, timeout=5)
+            
+            if response.status_code == 200:
+                print(f"[BUG_HUNTER] Error logged to Telegram successfully")
+                return True
+            else:
+                print(f"[BUG_HUNTER] Failed to send to Telegram: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"[BUG_HUNTER] Error in bug reporting: {str(e)}")
+            return False
 
 
 # ============= APPLICATION LAYER =============
@@ -101,7 +174,24 @@ class TelegramEnvironment:
                 "status_code": response.status_code
             }
         except Exception as e:
-            print(f"Error sending message: {str(e)}")
+            error_msg = f"Error sending message: {str(e)}"
+            stack_trace = traceback.format_exc()
+            print(error_msg)
+            print(stack_trace)
+            
+            # Log to bug hunter bot
+            bug_hunter = BugHunter()
+            bug_hunter.log_error(
+                error_type="SEND_MESSAGE_ERROR",
+                error_msg=error_msg,
+                stack_trace=stack_trace,
+                context_data={
+                    "chat_id": chat_id,
+                    "text_length": len(text),
+                    "has_reply_markup": reply_markup is not None
+                }
+            )
+            
             return {
                 "success": False,
                 "response_text": f"Xato: {str(e)}",
@@ -136,7 +226,23 @@ class TelegramEnvironment:
             
             return response.status_code == 200
         except Exception as e:
-            print(f"Error answering callback: {str(e)}")
+            error_msg = f"Error answering callback: {str(e)}"
+            stack_trace = traceback.format_exc()
+            print(error_msg)
+            print(stack_trace)
+            
+            # Log to bug hunter bot
+            bug_hunter = BugHunter()
+            bug_hunter.log_error(
+                error_type="CALLBACK_QUERY_ERROR",
+                error_msg=error_msg,
+                stack_trace=stack_trace,
+                context_data={
+                    "callback_query_id": callback_query_id,
+                    "text": text
+                }
+            )
+            
             return False
 
 
@@ -194,9 +300,23 @@ class TelegramAdapter:
                 }
         
         except Exception as e:
-            print(f"[ERROR] Update processing failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            error_msg = f"Update processing failed: {str(e)}"
+            stack_trace = traceback.format_exc()
+            print(f"[ERROR] {error_msg}")
+            print(stack_trace)
+            
+            # Log to bug hunter bot
+            bug_hunter = BugHunter()
+            bug_hunter.log_error(
+                error_type="UPDATE_PROCESSING_ERROR",
+                error_msg=error_msg,
+                stack_trace=stack_trace,
+                context_data={
+                    "update_type": type(update_dict).__name__,
+                    "update_keys": list(update_dict.keys()) if isinstance(update_dict, dict) else None
+                }
+            )
+            
             return {
                 "success": False,
                 "message": str(e),
@@ -270,7 +390,24 @@ class TelegramAdapter:
             }
         
         except Exception as e:
-            print(f"[ERROR] Message handling failed: {str(e)}")
+            error_msg = f"Message handling failed: {str(e)}"
+            stack_trace = traceback.format_exc()
+            print(f"[ERROR] {error_msg}")
+            print(stack_trace)
+            
+            # Log to bug hunter bot
+            bug_hunter = BugHunter()
+            bug_hunter.log_error(
+                error_type="MESSAGE_HANDLER_ERROR",
+                error_msg=error_msg,
+                stack_trace=stack_trace,
+                context_data={
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "text": text[:100] if text else None
+                }
+            )
+            
             return {
                 "success": False,
                 "message": str(e),
@@ -305,7 +442,24 @@ class TelegramAdapter:
             }
         
         except Exception as e:
-            print(f"[ERROR] Callback handling failed: {str(e)}")
+            error_msg = f"Callback handling failed: {str(e)}"
+            stack_trace = traceback.format_exc()
+            print(f"[ERROR] {error_msg}")
+            print(stack_trace)
+            
+            # Log to bug hunter bot
+            bug_hunter = BugHunter()
+            bug_hunter.log_error(
+                error_type="CALLBACK_HANDLER_ERROR",
+                error_msg=error_msg,
+                stack_trace=stack_trace,
+                context_data={
+                    "callback_id": callback_id,
+                    "callback_data": callback_data,
+                    "chat_id": chat_id
+                }
+            )
+            
             return {
                 "success": False,
                 "message": str(e),
@@ -360,9 +514,22 @@ def lambda_handler(event, context):
         }
     
     except Exception as e:
-        print(f"[LAMBDA ERROR] {str(e)}")
-        import traceback
-        traceback.print_exc()
+        error_msg = f"Lambda handler error: {str(e)}"
+        stack_trace = traceback.format_exc()
+        print(f"[LAMBDA ERROR] {error_msg}")
+        print(stack_trace)
+        
+        # Log critical error to bug hunter bot
+        bug_hunter = BugHunter()
+        bug_hunter.log_error(
+            error_type="LAMBDA_HANDLER_CRITICAL_ERROR",
+            error_msg=error_msg,
+            stack_trace=stack_trace,
+            context_data={
+                "request_type": "Telegram webhook",
+                "event_keys": list(event.keys()) if isinstance(event, dict) else None
+            }
+        )
         
         return {
             "statusCode": 500,
