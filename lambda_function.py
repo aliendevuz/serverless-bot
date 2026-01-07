@@ -17,10 +17,14 @@ class BugHunter:
     def log_error(self, error_type: str, error_msg: str, stack_trace: str = "", context_data: dict = None):
         """Log error to Telegram bot with details"""
         if not self.enabled:
+            print(f"[BUG_HUNTER] ⚠️  Not configured (token/chat_id missing) - Error: {error_type}")
             return False
         
         try:
             timestamp = datetime.now().isoformat()
+            
+            # Log to console first
+            print(f"[BUG_HUNTER] 🚨 Reporting {error_type} to Telegram...")
             
             # Prepare detailed log message (for file)
             detailed_log = f"""
@@ -65,10 +69,10 @@ Context Data:
             response = requests.post(url, json=payload, timeout=5)
             
             if response.status_code == 200:
-                print(f"[BUG_HUNTER] Error logged to Telegram successfully")
+                print(f"[BUG_HUNTER] ✅ {error_type} sent to Telegram successfully")
                 return True
             else:
-                print(f"[BUG_HUNTER] Failed to send to Telegram: {response.status_code}")
+                print(f"[BUG_HUNTER] ❌ Failed to send {error_type} to Telegram: {response.status_code}")
                 return False
                 
         except Exception as e:
@@ -340,6 +344,7 @@ class TelegramAdapter:
             
             # Route to command or message handler
             if text.startswith("/"):
+                BugHunter().log_error(text)
                 # Command message
                 command = text.split()[0]  # /start, /help, /echo, etc.
                 
