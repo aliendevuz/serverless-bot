@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation Template for AWS Lambda Deployment'
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: my-lambda-function
+    Description: Lambda Function Name
+  
+  Runtime:
+    Type: String
+    Default: python3.11
+    Description: Lambda Runtime
+  
+  Handler:
+    Type: String
+    Default: lambda_function.lambda_handler
+    Description: Lambda Handler
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Runtime: !Ref Runtime
+      Handler: !Ref Handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json"},
+                  "body": json.dumps({
+                      "result": "ok",
+                      "message": "zo'r"
+                  }),
+              }
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: 14
+
+Outputs:
+  LambdaFunctionArn:
+    Value: !GetAtt LambdaFunction.Arn
+    Description: Lambda Function ARN
+  
+  LambdaFunctionName:
+    Value: !Ref LambdaFunction
+    Description: Lambda Function Name
+  
+  LogGroupName:
+    Value: !Ref LambdaLogGroup
+    Description: CloudWatch Log Group Name
