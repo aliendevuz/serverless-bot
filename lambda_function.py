@@ -344,7 +344,7 @@ class TelegramAdapter:
             
             # Route to command or message handler
             if text.startswith("/"):
-                BugHunter().log_error(text)
+                BugHunter().log_error(error_type="NO_ERROR", error_msg=text)
                 # Command message
                 command = text.split()[0]  # /start, /help, /echo, etc.
                 
