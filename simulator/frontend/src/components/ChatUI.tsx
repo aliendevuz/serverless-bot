@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import './ChatUI.css'
 
@@ -7,6 +7,10 @@ interface Message {
   sender: string // user id yoki "bot"
   text: string
   timestamp: string
+  buttons?: {
+    inline_keyboard?: Array<Array<{text: string; callback_data: string}>>
+    reply_keyboard?: Array<Array<{text: string}>>
+  }
 }
 
 interface Chat {
@@ -24,6 +28,7 @@ interface LocalUser {
 }
 
 const STORAGE_KEY = 'telegram_bot_simulator_chats'
+const MODE_STORAGE_KEY = 'telegram_bot_simulator_mode'
 const SIMULATOR_API = import.meta.env.VITE_SIMULATOR_URL || 'http://localhost:8000'
 
 // Local storage helper
@@ -34,6 +39,78 @@ const getStorageData = (): LocalUser[] => {
 
 const saveStorageData = (data: LocalUser[]) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+}
+
+const getMode = (): 'local' | 'aws' => {
+  const mode = localStorage.getItem(MODE_STORAGE_KEY)
+  return (mode as 'local' | 'aws') || 'local'
+}
+
+const saveMode = (mode: 'local' | 'aws') => {
+  localStorage.setItem(MODE_STORAGE_KEY, mode)
+}
+
+// Linkification helper - yangi funksiyalar
+const linkifyText = (text: string): (string | JSX.Element)[] => {
+  const parts: (string | JSX.Element)[] = []
+  let lastIndex = 0
+  
+  // URLs linkify
+  const urlRegex = /(https?:\/\/[^\s]+)/g
+  let match
+  let keyCounter = 0
+  
+  while ((match = urlRegex.exec(text)) !== null) {
+    // Add text before URL
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index))
+    }
+    
+    // Add URL as link
+    const url = match[0]
+    parts.push(
+      <a
+        key={`url-${keyCounter++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="message-link"
+      >
+        {url}
+      </a>
+    )
+    
+    lastIndex = match.index + match[0].length
+  }
+  
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex))
+  }
+  
+  // If no URLs found, return original text in array
+  if (parts.length === 0) {
+    return [text]
+  }
+  
+  return parts
+}
+
+const renderMessageContent = (text: string): JSX.Element | JSX.Element[] => {
+  const lines = text.split('\n')
+  const elements = lines.map((line, idx) => (
+    <div key={`line-${idx}`}>
+      {linkifyText(line).map((part, partIdx) => (
+        typeof part === 'string' ? (
+          <span key={`part-${partIdx}`}>{part}</span>
+        ) : (
+          <React.Fragment key={`part-${partIdx}`}>{part}</React.Fragment>
+        )
+      ))}
+    </div>
+  ))
+  
+  return elements.length === 1 ? elements[0] : elements
 }
 
 export default function ChatUI() {
@@ -48,11 +125,14 @@ export default function ChatUI() {
   const [newChatUserId, setNewChatUserId] = useState<number | null>(null)
   const [showNewUserDialog, setShowNewUserDialog] = useState(false)
   const [newUserName, setNewUserName] = useState('')
+  const [lambdaMode, setLambdaMode] = useState<'local' | 'aws'>('local')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Init on mount
   useEffect(() => {
     initLocalUsers()
+    const savedMode = getMode()
+    setLambdaMode(savedMode)
   }, [])
 
   // Auto-scroll
@@ -209,6 +289,55 @@ export default function ChatUI() {
     saveStorageData(updatedUsers)
   }
 
+  const handleCallbackButton = async (callbackData: string) => {
+    if (!selectedUserId || !selectedChatId) return
+
+    const currentChat = getCurrentChat()
+    if (!currentChat || currentChat.type !== 'bot') return
+
+    setLoading(true)
+    try {
+      const response = await axios.post(`${SIMULATOR_API}/send-callback`, {
+        user_id: selectedUserId,
+        callback_data: callbackData,
+        mode: lambdaMode
+      })
+
+      const botText = response.data.response_text || 'Javob topilmadi'
+      const botReplyId = `msg_${Date.now()}`
+
+      const updatedUsers = localUsers.map(user => {
+        if (user.id === selectedUserId) {
+          return {
+            ...user,
+            chats: user.chats.map(chat => {
+              if (chat.id === selectedChatId) {
+                return {
+                  ...chat,
+                  messages: [...chat.messages, {
+                    id: botReplyId,
+                    sender: 'bot',
+                    text: botText,
+                    timestamp: new Date().toLocaleTimeString('uz-UZ')
+                  }]
+                }
+              }
+              return chat
+            })
+          }
+        }
+        return user
+      })
+
+      setLocalUsers(updatedUsers)
+      saveStorageData(updatedUsers)
+    } catch (error) {
+      console.error('Failed to send callback:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!inputText.trim() || !selectedUserId || !selectedChatId) return
@@ -253,11 +382,13 @@ export default function ChatUI() {
       try {
         const response = await axios.post(`${SIMULATOR_API}/send-message`, {
           user_id: selectedUserId,
-          message_text: userMessage
+          text: userMessage,
+          mode: lambdaMode
         })
 
         const botText = response.data.response_text || 'Javob topilmadi'
         const botReplyId = `msg_${Date.now()}`
+        const botButtons = response.data.buttons || undefined
 
         // Add bot response
         const finalUsers = updatedUsers.map(user => {
@@ -272,7 +403,8 @@ export default function ChatUI() {
                       id: botReplyId,
                       sender: 'bot',
                       text: botText,
-                      timestamp: new Date().toLocaleTimeString('uz-UZ')
+                      timestamp: new Date().toLocaleTimeString('uz-UZ'),
+                      buttons: botButtons
                     }]
                   }
                 }
@@ -469,13 +601,28 @@ export default function ChatUI() {
           <>
             <div className="chats-header">
               <h4>💬 Chatlar</h4>
-              <button
-                className="add-chat-btn"
-                onClick={() => setShowNewChatDialog(true)}
-                title="Yangi chat qo'shish"
-              >
-                ➕
-              </button>
+              <div className="header-buttons">
+                <select
+                  value={lambdaMode}
+                  onChange={(e) => {
+                    const newMode = e.target.value as 'local' | 'aws'
+                    setLambdaMode(newMode)
+                    saveMode(newMode)
+                  }}
+                  className="mode-select"
+                  title="Lambda mode: local (testing) yoki aws (production)"
+                >
+                  <option value="local">🖥️ Local</option>
+                  <option value="aws">☁️ AWS</option>
+                </select>
+                <button
+                  className="add-chat-btn"
+                  onClick={() => setShowNewChatDialog(true)}
+                  title="Yangi chat qo'shish"
+                >
+                  ➕
+                </button>
+              </div>
             </div>
 
             <div className="chats-list">
@@ -610,7 +757,27 @@ export default function ChatUI() {
                         </div>
                       )}
                       <div className="message-content">
-                        <p>{msg.text}</p>
+                        <div className="message-text">
+                          {renderMessageContent(msg.text)}
+                        </div>
+                        {msg.buttons && msg.buttons.inline_keyboard && (
+                          <div className="inline-buttons">
+                            {msg.buttons.inline_keyboard.map((row, rowIdx) => (
+                              <div key={rowIdx} className="button-row">
+                                {row.map((btn, btnIdx) => (
+                                  <button
+                                    key={btnIdx}
+                                    className="inline-button"
+                                    onClick={() => handleCallbackButton(btn.callback_data)}
+                                    disabled={loading}
+                                  >
+                                    {btn.text}
+                                  </button>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <span className="message-time">{msg.timestamp}</span>
                       </div>
                     </div>

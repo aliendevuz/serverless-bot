@@ -250,17 +250,21 @@ class TelegramAdapter:
                 response_text = self.env.app.handle_echo_message(text)
             
             # Send response
+            buttons = None
             if response_text:
                 self.env.send_message(
                     chat_id,
                     response_text,
                     reply_markup=keyboard
                 )
+                if keyboard:
+                    buttons = keyboard
             
             return {
                 "success": True,
                 "message": "Message processed",
                 "response_text": response_text,
+                "buttons": buttons,
                 "is_simulator": self.is_simulator,
                 "responses": self.env.responses if self.is_simulator else []
             }
@@ -295,6 +299,7 @@ class TelegramAdapter:
                 "success": True,
                 "message": "Callback processed",
                 "response_text": response_text,
+                "buttons": None,
                 "is_simulator": self.is_simulator,
                 "responses": self.env.responses if self.is_simulator else []
             }
