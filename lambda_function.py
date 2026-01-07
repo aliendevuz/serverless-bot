@@ -26,9 +26,11 @@ def handle_message(message_data):
 
 # ============= ENVIRONMENT LAYER =============
 class TelegramEnvironment:
-    def __init__(self):
+    def __init__(self, is_simulator=False):
         self.bot_token = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
+        self.is_simulator = is_simulator
+        self.simulator_url = os.environ.get("SIMULATOR_URL", "http://localhost:8000")
     
     def process_message(self, message_data):
         """
@@ -50,7 +52,7 @@ class TelegramEnvironment:
     
     def send_message(self, response_data):
         """
-        Send message to Telegram via API
+        Send message to Telegram via API or to Simulator
         
         Args:
             response_data: Dictionary with chat_id and text
@@ -64,6 +66,13 @@ class TelegramEnvironment:
                 "text": response_data.get("text")
             }
             
+            # If simulator, send to simulator endpoint instead of Telegram
+            if self.is_simulator:
+                # Simulator will handle response rendering on frontend
+                print(f"[SIMULATOR] Message queued for user {response_data.get('chat_id')}: {response_data.get('text')}")
+                return True
+            
+            # Real Telegram API
             response = requests.post(
                 f"{self.api_url}/sendMessage",
                 json=payload,
@@ -78,8 +87,9 @@ class TelegramEnvironment:
 
 # ============= ADAPTER LAYER =============
 class TelegramAdapter:
-    def __init__(self):
-        self.telegram_env = TelegramEnvironment()
+    def __init__(self, is_simulator=False):
+        self.telegram_env = TelegramEnvironment(is_simulator=is_simulator)
+        self.is_simulator = is_simulator
     
     def process_update(self, update):
         """
@@ -114,7 +124,9 @@ class TelegramAdapter:
             
             return {
                 "success": success,
-                "message": "Message processed and sent" if success else "Failed to send message"
+                "message": "Message processed and sent" if success else "Failed to send message",
+                "response_text": response_data.get("text"),
+                "is_simulator": self.is_simulator
             }
         
         except Exception as e:
@@ -130,19 +142,23 @@ def lambda_handler(event, context):
     AWS Lambda handler for Telegram webhook
     
     Flow:
-    1. Receives webhook event from Telegram
+    1. Receives webhook event from Telegram or Simulator
     2. Passes to adapter
     3. Adapter -> Environment -> Application (processing)
     4. Application -> Environment -> Adapter (response)
-    5. Adapter sends response to Telegram
+    5. Adapter sends response to Telegram or Simulator
     6. Returns success status to Lambda
     """
     try:
         # Parse incoming webhook event
         body = json.loads(event.get("body", "{}")) if isinstance(event.get("body"), str) else event.get("body", {})
         
-        # Initialize adapter and process update
-        adapter = TelegramAdapter()
+        # Check if request is from simulator
+        headers = event.get("headers", {})
+        is_simulator = headers.get("X-Simulator", "").lower() == "true"
+        
+        # Initialize adapter with simulator flag
+        adapter = TelegramAdapter(is_simulator=is_simulator)
         result = adapter.process_update(body)
         
         return {
